@@ -33,6 +33,7 @@
 #include "esp_avrc_api.h"
 #include "driver/i2s.h"
 
+#define DEVICE_NAME "tamboSound"
 /* event for handler "bt_av_hdl_stack_up */
 enum {
     BT_APP_EVT_STACK_UP = 0,
@@ -60,7 +61,7 @@ void app_main()
 #endif
         .sample_rate = 44100,
         .bits_per_sample = 16,
-        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,                           //2-channels or I2S_CHANNEL_FMT_ALL_RIGHT   
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,                           //2-channels or I2S_CHANNEL_FMT_ALL_RIGHT
         .communication_format = I2S_COMM_FORMAT_I2S_MSB,
         .dma_buf_count = 6,
         .dma_buf_len = 60,
@@ -194,8 +195,7 @@ static void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
     switch (event) {
     case BT_APP_EVT_STACK_UP: {
         /* set up device name */
-        char *dev_name = "ESP_SPEAKER";
-        esp_bt_dev_set_device_name(dev_name);
+        esp_bt_dev_set_device_name(DEVICE_NAME);
 
         esp_bt_gap_register_callback(bt_app_gap_cb);
         /* initialize A2DP sink */
