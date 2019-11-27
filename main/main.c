@@ -33,7 +33,14 @@
 #include "esp_avrc_api.h"
 #include "driver/i2s.h"
 
+#include "leds.h"
+
 #define DEVICE_NAME "tamboSound"
+
+// Prototypes
+esp_err_t init_nvs_flash();
+esp_err_t init_i2s();
+esp_err_t init_bluetooth();
 /* event for handler "bt_av_hdl_stack_up */
 enum {
     BT_APP_EVT_STACK_UP = 0,
@@ -46,114 +53,16 @@ static void bt_av_hdl_stack_evt(uint16_t event, void *p_param);
 void app_main()
 {
     /* Initialize NVS — it is used to store PHY calibration data */
-    esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(err);
+    ESP_ERROR_CHECK(init_nvs_flash());
 
-    i2s_config_t i2s_config = {
-#ifdef CONFIG_A2DP_SINK_OUTPUT_INTERNAL_DAC
-        .mode = I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_DAC_BUILT_IN,
-#else
-        .mode = I2S_MODE_MASTER | I2S_MODE_TX,                                  // Only TX
-#endif
-        .sample_rate = 44100,
-        .bits_per_sample = 16,
-        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,                           //2-channels or I2S_CHANNEL_FMT_ALL_RIGHT
-        .communication_format = I2S_COMM_FORMAT_I2S_MSB,
-        .dma_buf_count = 6,
-        .dma_buf_len = 60,
-        .intr_alloc_flags = 0,                                                  //Default interrupt priority
-        .tx_desc_auto_clear = true                                              //Auto clear tx descriptor on underflow
-    };
+    ESP_ERROR_CHECK(init_leds());
 
+    // Initialize i2s interface
+    ESP_ERROR_CHECK(init_i2s());
 
-    i2s_driver_install(0, &i2s_config, 0, NULL); //This function must be called before any I2S driver read/write operations.
-#ifdef CONFIG_A2DP_SINK_OUTPUT_INTERNAL_DAC
-    /*
-    I2S_DAC_CHANNEL_DISABLE = 0
+    // Initialize bluetooth interface
+    ESP_ERROR_CHECK(init_bluetooth());
 
-        Disable I2S built-in DAC signals
-
-    I2S_DAC_CHANNEL_RIGHT_EN = 1
-
-        Enable I2S built-in DAC right channel, maps to DAC channel 1 on GPIO25
-
-    I2S_DAC_CHANNEL_LEFT_EN = 2
-
-        Enable I2S built-in DAC left channel, maps to DAC channel 2 on GPIO26
-
-    I2S_DAC_CHANNEL_BOTH_EN = 0x3
-
-        Enable both of the I2S built-in DAC channels.
-
-    I2S_DAC_CHANNEL_MAX = 0x4
-
-        I2S built-in DAC mode max index
-    */
-    i2s_set_dac_mode(I2S_DAC_CHANNEL_BOTH_EN);
-    i2s_set_pin(0, NULL); // Set both gpio (25-26) as DAC, if you don’t want this to happen and you want to initialize only one of the DAC channels, you can call i2s_set_dac_mode instead.
-#else
-    i2s_pin_config_t pin_config = {
-        .bck_io_num = CONFIG_I2S_BCK_PIN,
-        .ws_io_num = CONFIG_I2S_LRCK_PIN,
-        .data_out_num = CONFIG_I2S_DATA_PIN,
-        .data_in_num = -1                                                       //Not used
-    };
-
-    i2s_set_pin(0, &pin_config);
-#endif
-
-
-    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
-
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    if ((err = esp_bt_controller_init(&bt_cfg)) != ESP_OK) {
-        ESP_LOGE(BT_AV_TAG, "%s initialize controller failed: %s\n", __func__, esp_err_to_name(err));
-        return;
-    }
-
-    if ((err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT)) != ESP_OK) {
-        ESP_LOGE(BT_AV_TAG, "%s enable controller failed: %s\n", __func__, esp_err_to_name(err));
-        return;
-    }
-
-    if ((err = esp_bluedroid_init()) != ESP_OK) {
-        ESP_LOGE(BT_AV_TAG, "%s initialize bluedroid failed: %s\n", __func__, esp_err_to_name(err));
-        return;
-    }
-
-    if ((err = esp_bluedroid_enable()) != ESP_OK) {
-        ESP_LOGE(BT_AV_TAG, "%s enable bluedroid failed: %s\n", __func__, esp_err_to_name(err));
-        return;
-    }
-
-    /* create application task */
-    bt_app_task_start_up();
-
-    /* Bluetooth device name, connection mode and profile set up */
-    bt_app_work_dispatch(bt_av_hdl_stack_evt, BT_APP_EVT_STACK_UP, NULL, 0, NULL);
-
-#if (CONFIG_BT_SSP_ENABLED == true)
-    /* Set default parameters for Secure Simple Pairing */
-    esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
-    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IO;
-    esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
-#endif
-
-    /*
-     * Set default parameters for Legacy Pairing
-     * Use fixed pin code
-     */
-    esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_FIXED;
-    esp_bt_pin_code_t pin_code;
-    pin_code[0] = '1';
-    pin_code[1] = '2';
-    pin_code[2] = '3';
-    pin_code[3] = '4';
-    esp_bt_gap_set_pin(pin_type, 4, pin_code);
 }
 
 void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
@@ -215,4 +124,107 @@ static void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
         ESP_LOGE(BT_AV_TAG, "%s unhandled evt %d", __func__, event);
         break;
     }
+}
+
+
+esp_err_t init_nvs_flash()
+{
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    return err;
+}
+
+esp_err_t init_i2s()
+{
+    esp_err_t err;
+    i2s_config_t i2s_config = {
+        .mode = I2S_MODE_MASTER | I2S_MODE_TX,                                  // Only TX
+        .sample_rate = 44100,
+        .bits_per_sample = 16,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,                           //2-channels or I2S_CHANNEL_FMT_ALL_RIGHT
+        .communication_format = I2S_COMM_FORMAT_I2S_MSB,
+        .dma_buf_count = 6,
+        .dma_buf_len = 60,
+        .intr_alloc_flags = 0,                                                  //Default interrupt priority
+        .tx_desc_auto_clear = true                                              //Auto clear tx descriptor on underflow
+    };
+
+    //This function must be called before any I2S driver read/write operations.
+    if((err = i2s_driver_install(0, &i2s_config, 0, NULL)) != ESP_OK)
+    {
+        return err;
+    }
+
+    i2s_pin_config_t pin_config = {
+        .bck_io_num = CONFIG_I2S_BCK_PIN,
+        .ws_io_num = CONFIG_I2S_LRCK_PIN,
+        .data_out_num = CONFIG_I2S_DATA_PIN,
+        .data_in_num = -1                                                       //Not used
+    };
+
+    err = i2s_set_pin(0, &pin_config);
+
+    return err;
+}
+
+//*************************************************************************************************************************************************************
+
+esp_err_t init_bluetooth()
+{
+    esp_err_t err;
+
+    // Release BLE mode from memory
+    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
+
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    if ((err = esp_bt_controller_init(&bt_cfg)) != ESP_OK) {
+        ESP_LOGE(BT_AV_TAG, "%s initialize controller failed: %s\n", __func__, esp_err_to_name(err));
+        return err;
+    }
+
+    if ((err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT)) != ESP_OK) {
+        ESP_LOGE(BT_AV_TAG, "%s enable controller failed: %s\n", __func__, esp_err_to_name(err));
+        return err;
+    }
+
+    if ((err = esp_bluedroid_init()) != ESP_OK) {
+        ESP_LOGE(BT_AV_TAG, "%s initialize bluedroid failed: %s\n", __func__, esp_err_to_name(err));
+        return err;
+    }
+
+    if ((err = esp_bluedroid_enable()) != ESP_OK) {
+        ESP_LOGE(BT_AV_TAG, "%s enable bluedroid failed: %s\n", __func__, esp_err_to_name(err));
+        return err;
+    }
+
+    /* create application task */
+    bt_app_task_start_up();
+
+    /* Bluetooth device name, connection mode and profile set up */
+    bt_app_work_dispatch(bt_av_hdl_stack_evt, BT_APP_EVT_STACK_UP, NULL, 0, NULL);
+
+    //Secue Simple Pairing option
+#if (CONFIG_BT_SSP_ENABLED == true)
+    /* Set default parameters for Secure Simple Pairing */
+    esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
+    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IO;
+    esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
+#endif
+
+    /*
+     * Set default parameters for Legacy Pairing
+     * Use fixed pin code
+     */
+    esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_FIXED;
+    esp_bt_pin_code_t pin_code;
+    pin_code[0] = '1';
+    pin_code[1] = '2';
+    pin_code[2] = '3';
+    pin_code[3] = '4';
+    esp_bt_gap_set_pin(pin_type, 4, pin_code);
+
+    return err;
 }
